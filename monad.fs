@@ -1,10 +1,9 @@
-﻿#I @"\packages"
-#r @"FSharpx.Core.1.8.41\lib\40\FSharpx.Core.dll"
+﻿#I @"./packages"
+#r @"FSharpx.Core.1.8.41/lib/40/FSharpx.Core.dll"
 
 //---------------------------
 //I.Bottom up introduction to monad and computation expressions - 5'
 module BottomUp =
-
     let log p = printfn "expression is %A" p
 
     //linear
@@ -16,6 +15,7 @@ module BottomUp =
         let z = x + y
         log z
         z
+
 
     //a bit functional 
     let loggedWorkflow = 
@@ -32,6 +32,7 @@ module BottomUp =
                                            bind(x+y, (fun z -> log z))))))
       
 
+
     //We dont want to write that spaghetti. 
     //All we have done is very mechanical, so is there a way to make it look nicer ?
     //Computation Expression
@@ -47,7 +48,6 @@ module BottomUp =
                                    let! z = x + y
                                    return z}
     //lean and mean
-
 
 //------------------
 //II.Computations - 2'
@@ -119,6 +119,7 @@ module MonadicThinking =
     let box   (x:'a) :Id<'a> = Id x
     let unbox ((Id x):Id<'a>): 'a = x
 
+    // the minimal type correct monad
     type IdBuilder () = 
         member this.Return (x:'a) : Id<'a> = box x
         member this.Bind(x:Id<'T>, f:'T->Id<'U>) = unbox x |> f 
@@ -135,22 +136,22 @@ module MonadicThinking =
 
  //Lazy monad - 5'
  module Lazy = 
-
-    // Focus on the type
+    // Focus on the type T = T
     type Lazy<'T> = unit -> 'T
 
-    let force (x:Lazy<_>) = x()
-    let lazy' x = fun () -> printfn "using %A" x; x
+    let force (x:Lazy<_>) = let r = x() in printfn "using %A" r; r
+    let lazy' x = fun () -> printfn "using %A" x; x  //not a good idea - why ?  -                                                   functional abstraction incurs greedy eval - greedy eval means loosing composability of evaluation strategy  
 
     type LazyBuilder () = 
-        member this.Return (x) : Lazy<_> = (* printfn "using %A" x;*) lazy' x 
-        member this.Bind(x:Lazy<'T>, f:'T->Lazy<'U>) = lazy'(x |> force |> f |> force )
-        //member this.Bind(x:Lazy<'T>, f:'T->Lazy<'U>) = this.Return(x |> force |> f |> force )  //not such good idea - building interface 
-
+        member this.Return (x) : Lazy<_> = fun () -> x 
+        member this.Bind(x:Lazy<'T>, f:'T->Lazy<'U>) =  
+            fun () -> (x |> force |> f |> force ) 
+        //member this.Bind(x:Lazy<'T>, f:'T->Lazy<'U>) =  lazy' (x |> force |> f |> force )  
+ 
     let lazyb = LazyBuilder () 
-    let result = lazyb { let! a = lazy' ("Hello,")
-                         let! b = lazy' ("World!")
-                         let! which = lazy'(true)
+    let result = lazyb { let! a = fun () -> ("Hello,")
+                         let! b = fun () -> ("World!")
+                         let! which = fun () -> true
                          if which then
                              return a
                          else return "Beurk!"}
@@ -163,7 +164,11 @@ module MonadicThinking =
                                                    )
                                )
                               )
-           ))
+           ))()
+         |> ignore
+
+    lazyb.Bind(lazyb.Return("Hello,"),      
+               (fun a -> lazyb.Return(a)))
          |> ignore
 
 module Resumption = 
@@ -171,6 +176,18 @@ module Resumption =
     | NotYet of (unit -> Resumption<'a>)
     | Result of 'a
 
+    let step wf =
+      match wf with 
+      | NotYet(f) -> f()
+      | Result(v) -> Result(v)
+
+    let rec evaluate counter steps =
+      printfn "[STEP: %d]" counter
+      match steps with 
+      | NotYet(f) -> //answer web request ...   
+                     evaluate (counter + 1) (f())
+      | Result(v) -> v
+    
     let returnR v = Result(v)
 
     let rec bindR v f =
@@ -181,6 +198,8 @@ module Resumption =
     type ResumptionBuilder() = 
         member x.Bind(v, f) = bindR v f
         member x.Return(v) = returnR v
+
+
     
     let resumable = new ResumptionBuilder()
 
@@ -203,31 +222,22 @@ module Resumption =
       let count = numbers |> List.filter isPrime |> List.length
       return count }
       
-    let steps() = resumable {  
+    let steps = resumable {  
       let! a = calculate1()
       printfn "first part finished!"
       let! b = calculate2()
       printfn "second part finished!"
       return (a, b) }
 
-    let rec evaluate counter steps =
-      printfn "[STEP: %d]" counter
-      match steps with 
-      | NotYet(f) -> evaluate (counter + 1) (f())
-      | Result(v) -> v
 
-    
-    steps() |> evaluate 0  |> ignore
+    steps |> evaluate 0  |> ignore
+    let ( NotYet(f1)) = steps
+    let ( NotYet(f2)) = f1()
+    let ( Result(a)) = f2()
+//   
 
 
-module Continuation = 
-    type ContinuationBuilder() =
-        member this.Bind (m, f) = fun c -> m (fun a -> f a c)
-        member this.Return x = fun k -> k x
-    let cont = ContinuationBuilder()
-
-
-//STATE monad - first full methodology
+//STATE monad 
  module State = 
            
     //warmup as in first paragraph      - 2'       
@@ -374,7 +384,7 @@ module Continuation =
 //          isTrue result
 //          do! closePage })
 
-
+//
 //Reader monad - 5'
 module Reader = 
 
@@ -459,36 +469,36 @@ module Reader =
     let s1 = new Stack<int>([1..3])
     let s2 = new Stack<int>()
     let moved = move s1 s2
-    s2
-    s1
+    s2 |> ignore
+    s1 |> ignore
 
 
- 
-    //usage 2  -  specialise usage into monadic primitive
-    let ask     = Reader (id)                                //read the environnement from the environment
-    let asks  f = reader { let! r = ask in return (f r) }    //read (f environment) from the environement
-    let local f m = Reader (f >> runReader m)                //read m from (f environment)
-
-
-
-    let openPage (url:string) = reader { let! (browser : Browser) = ask
-                                         return browser.GoTo url }
-
-    let openPage (url:string) = Reader ( fun (browser : Browser) -> browser.GoTo url)
-    let openPage (url:string) = reader { return! asks (fun (browser : Browser) -> browser.GoTo url) }
-
-
-    //usage 2 -  compose into bigger expression and run
-    [<Fact>]
-    let ``Can find CodeBetter on Bing``() =
-      reader {
-        do! openPage "http://bing.com"
-        do! enterText "q" "CodeBetter"
-        do! clickButton "go"
-        let! result = containsText "CodeBetter"
-        isTrue result
-        do! closePage } |> runScript
-
+// 
+//    //usage 2  -  specialise usage into monadic primitive
+//    let ask     = Reader (id)                                //read the environnement from the environment
+//    let asks  f = reader { let! r = ask in return (f r) }    //read (f environment) from the environement
+//    let local f m = Reader (f >> runReader m)                //read m from (f environment)
+//
+//
+//
+//    let openPage (url:string) = reader { let! (browser : Browser) = ask
+//                                         return browser.GoTo url }
+//
+//    let openPage (url:string) = Reader ( fun (browser : Browser) -> browser.GoTo url)
+//    let openPage (url:string) = reader { return! asks (fun (browser : Browser) -> browser.GoTo url) }
+//
+//
+//    //usage 2 -  compose into bigger expression and run
+//    [<Fact>]
+//    let ``Can find CodeBetter on Bing``() =
+//      reader {
+//        do! openPage "http://bing.com"
+//        do! enterText "q" "CodeBetter"
+//        do! clickButton "go"
+//        let! result = containsText "CodeBetter"
+//        isTrue result
+//        do! closePage } |> runScript
+//
 
 
 
